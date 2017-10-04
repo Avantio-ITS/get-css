@@ -2,6 +2,7 @@
 
 var q = require('q');
 var isCss = require('is-css');
+var isHtml = require('is-html');
 var isPresent = require('is-present');
 var isBlank = require('is-blank');
 var isUrl = require('is-url-superb');
@@ -130,7 +131,8 @@ module.exports = function(url, options){
       return;
     }
 
-    if (response && response.statusCode != 200) {
+    var validBody = !isCss(url) && isHtml(body);
+    if (response && response.statusCode != 200 && !validBody) {
       if (options.verbose) console.log('Received a ' + response.statusCode + ' from: ' + url);
       deferred.reject({ url: url, statusCode: response.code });
       return;
