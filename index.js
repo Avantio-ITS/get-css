@@ -43,11 +43,13 @@ module.exports = function(url, options){
   var result = {
     links: [],
     styles: [],
-    css: ''
+    css: []
   };
 
   function handleResolve() {
     if (status.parsed >= status.total) {
+      const css = [].concat.apply([], result.css);
+      result.css = css.join('');
       deferred.resolve(result);
     }
   }
@@ -56,57 +58,73 @@ module.exports = function(url, options){
     var $ = cheerio.load(html);
     result.pageTitle = $('head > title').text();
 
-    $('[rel=stylesheet]').each(function() {
-        var link = $(this).attr('href');
-        if(isPresent(link)) {
-            result.links.push(createLink(link, url));
-        }else{
-            result.styles.push(stripHtmlComments($(this).text()));
-        }
+    var toProcess = [];
+    $('style, [rel=stylesheet]').each(function() {
+      var link = $(this).attr('href');
+      if(isPresent(link)) {
+        return toProcess.push({
+          isLink: true,
+          content: createLink(link, url)
+        });
+      }
+      toProcess.push({
+        isLink: false,
+        content: stripHtmlComments($(this).text())
+      });
     });
 
-    $('style').each(function() {
-      result.styles.push(stripHtmlComments($(this).text()));
-    });
-
-    status.total = result.links.length + result.styles.length;
+    status.total = toProcess.length;
     if (!status.total) {
       deferred.resolve(false);
     }
 
-    result.links.forEach(function(link) {
-      getLinkContents(link.url, options)
-        .then(function(css) {
-          handleCssFromLink(link, css);
-        })
-        .catch(function(error) {
-          link.error = error;
-          status.parsed++;
-          handleResolve();
-        });
-    });
-
-    result.styles.forEach(function(css) {
-      result.css += css;
+    toProcess.forEach(function(task, index) {
+      if (task.isLink) {
+        return getLinkContents(task.content.url, options)
+          .then(function(css) {
+            handleCssFromLink(task.content, css, index);
+          })
+          .catch(function(error) {
+            // link.error = error;
+            status.parsed++;
+            handleResolve();
+          });
+      }
+      result.css[index] = task.content;
       status.parsed++;
       handleResolve();
     });
   }
 
-  function handleCssFromLink(link, css) {
+  function handleCssFromLink(link, css, index) {
     link.css += css;
 
-    parseCssForImports(link, css);
+    result.css[index] = css;
+    // For now, we don't support the @import url follow
+    // parseCssForImports(link, css, index);
 
     status.parsed++;
     handleResolve();
   }
 
+  function setCss(index, css) {
+    if (!result.css[index]) {
+      result.css[index] = css;
+      return;
+    }
+
+    if (!Array.isArray(result.css[index])) {
+      result.css[index] = [result.css[index]];
+    }
+    result.css[index].push(css);
+  }
+
+  // TODO: Asegurarse de que esto funciona
   // Handle potential @import url(foo.css) statements in the CSS.
-  function parseCssForImports(link, css) {
+  function parseCssForImports(link, css, index) {
     link.imports = resolveCssImportUrls(link.url, css);
     status.total += link.imports.length;
-    result.css += css;
+    setCss(index, css);
 
     link.imports.forEach(function(importUrl) {
       var importLink = createLink(importUrl, importUrl);
@@ -114,7 +132,7 @@ module.exports = function(url, options){
 
       getLinkContents(importLink.url, options)
         .then(function(css) {
-          handleCssFromLink(importLink, css);
+          handleCssFromLink(importLink, css, index);
         })
         .catch(function(error) {
           link.error = error;
